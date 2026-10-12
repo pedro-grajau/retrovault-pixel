@@ -4,12 +4,11 @@
 
 Backend e comandos carregam `.env` da raiz. Defaults comerciais são próprios da demonstração, independentes do IGDB.
 
+Quando `APP_ORIGIN` aponta para loopback, `localhost`, `127.0.0.1` e `[::1]` são aceitos apenas no mesmo protocolo e porta. Uma origem pública continua restrita ao endereço configurado. Após alterar configurações ou código do backend, reinicie `make api`.
+
 | Variável | Padrão | Efeito |
 |---|---:|---|
 | CATALOG_INITIAL_PER_PLATFORM | 5 | Amostra inicial por console |
-| CATALOG_EXPANSION_PER_PLATFORM | 1 | Novas ofertas por console/execução |
-| IMPORT_INTERVAL_SECONDS | 86400 | Agenda IGDB diária |
-| SIMULATION_INTERVAL_SECONDS | 1800 | Demanda a cada 30 minutos |
 | SIMULATION_BATCH_SIZE | 3 | Máximo de eventos por lote |
 | SESSION_TTL_SECONDS | 86400 | Expiração por inatividade |
 | SALE_STOCK | 3 | Unidades de venda em nova sessão |
@@ -19,19 +18,15 @@ Backend e comandos carregam `.env` da raiz. Defaults comerciais são próprios d
 | RENTAL_DAYS | 7 | Prazo de aluguel |
 | CHAT_LIMIT_PER_HOUR | 30 | Mensagens por sessão/hora |
 
-Estoques padrão afetam novas sessões. Importação não redefine preços, estoque ou pedidos existentes. Novas ofertas ficam elegíveis para estoques de novas sessões. O catálogo é global; o comércio é isolado por visitante. Para nova sessão imediata, use janela privada ou remova somente o cookie da demonstração local.
+Estoques padrão afetam novas sessões e ofertas incluídas pelo admin nas sessões ativas. Inclusões repetidas não repõem estoque. O catálogo é global; o comércio é isolado por visitante.
 
-## Importação e scheduler
+## Carga inicial e manutenção
 
-`make import-initial` autentica no IGDB, resolve os seis consoles e seleciona amostra popular com preferência por variedade de gêneros. `make import` amplia e atualiza metadados. Ausência de capa/descrição tem fallback; preços não vêm da API externa. Identidade jogo IGDB/plataforma é única.
+`make import-initial` é destinado a catálogo vazio. Resolve os consoles no IGDB e seleciona uma amostra com variedade de gêneros, priorizando lançamentos próprios de PSP. Após essa carga, a expansão depende de busca, seleção e confirmação no painel administrativo. Metadados ausentes têm fallback; preços vêm da configuração fictícia.
 
-`import_runs` registra running/complete/failed, contagem e erro sanitizado. Trava PostgreSQL impede sobreposição. Há no máximo três tentativas por consulta, espaçamento de 0,30 segundo entre requisições e renovação do token expirado/recusado. A carga é transacional: falhas preservam o catálogo anterior.
+`make worker` executa somente manutenção a cada 30 segundos, sem gerar demanda ou importar títulos. `make tick` executa uma rodada de manutenção. Sessões expiradas perdem acesso público, mas seus históricos comerciais e conversacionais são preservados. A interface pública apresenta os últimos 20 lotes e 100 pedidos; o admin consulta registros paginados e totais sem esse limite.
 
-`make worker` consulta agendas a cada 30 segundos. Janelas são alinhadas pelo horário Unix, com identidade `scheduled:<número da janela>`. O primeiro processamento da sessão na janela atual pode acontecer logo ao iniciar o worker; os seguintes não reaplicam os efeitos. Dois workers são protegidos por trava. Mantenha o processo ativo para executar agendas locais.
-
-`make tick` consulta uma vez as agendas, útil para verificar operação ou para scheduler externo futuro. Repeti-lo na mesma janela não duplica demanda/importação concluídas. Avançar simulação cria um lote manual distinto, com espera mínima de cinco segundos. Agenda e checkout usam a mesma trava de sessão; eventos respeitam estoque e exemplares.
-
-Worker processa sessões ativas e remove demonstrações expiradas com carrinhos, pedidos e histórico. Catálogo permanece. A interface apresenta os últimos 20 lotes e 100 pedidos; banco persiste todos até expiração. Devoluções automáticas incluem apenas aluguéis da demanda fictícia, preservando o controle do visitante sobre seus aluguéis.
+O botão Avançar simulação cria um lote manual com espera mínima de cinco segundos. Lotes repetidos não duplicam efeitos. As regras de estoque e devolução são as mesmas do comércio; devoluções da demanda incluem somente aluguéis da própria demanda fictícia. Apenas o admin adiciona jogos, em ação separada que não produz pedidos.
 
 ## Comércio
 
@@ -70,7 +65,7 @@ with httpx.Client(base_url="http://localhost:8000/api") as api:
 
 ## Pixel e futuro WhatsApp
 
-Responses API utiliza search_catalog, get_cart, set_cart, prepare_checkout e get_orders. Matching platforms ajuda a esclarecer títulos com várias ofertas. Ferramentas consultam dados atuais e usam os mesmos serviços comerciais do site; não expõem credenciais, conexão, alterações de preço/estoque ou finalização.
+Responses API utiliza search_catalog, record_recommendations, get_cart, set_cart, prepare_checkout e get_orders. Matching platforms ajuda a esclarecer títulos com várias ofertas. Ferramentas consultam dados atuais e usam os mesmos serviços comerciais do site; não expõem credenciais, conexão, alterações de preço/estoque ou finalização.
 
 Servidor intercepta “Confirmo o pedido” e confirma somente o resumo vigente da própria sessão. Texto do modelo não cria pedido. Há 16 mensagens de contexto, quatro rodadas por resposta, até 1.000 tokens de saída/rodada, timeout de 30 segundos por chamada e uma resposta em andamento por sessão. Chamadas usam `store=false`. Falha ou limite da IA preserva catálogo/carrinho; operações já realizadas continuam visíveis após atualizar estado.
 
@@ -83,3 +78,29 @@ Servidor intercepta “Confirmo o pedido” e confirma somente o resumo vigente 
 Em 11/10/2026, o iframe de Chrono Trigger foi avaliado no desktop e em viewport de 390 pixels. Exibiu carregamento/publicidade, sem confirmação confiável do jogo iniciado. Por isso `embed_url` fica vazio por padrão. Suporte opcional carrega iframe apenas pelo botão Jogar aqui, com link alternativo e fechamento independente do provedor.
 
 Para nova avaliação local: `PYTHONPATH=backend .venv/bin/python -m retrovault.cli demos --enable-embeds`. Confirme título, carregamento e interação antes de habilitá-lo. `make demos` restaura links como padrão. Demos não são necessárias para vender/alugar; projeto não hospeda arquivos de jogos.
+
+## Histórico administrativo e expiração
+
+O acesso público expira por inatividade. O worker de manutenção marca a sessão como expirada e limpa carrinho, checkouts não consumidos e estoque temporário sem apagar pedidos, aluguéis, conversas ou eventos. Exemplares referenciados por aluguéis permanecem no banco. A limpeza ocorre uma única vez por sessão.
+
+A migração 003 é aditiva. Mensagens anteriores disponíveis são marcadas como legado parcial, com horário original desconhecido; mensagens já descartadas não são reconstruídas. Antes de atualizar, mantenha backup do PostgreSQL e confira contagens e totais. Em rollback, pare o worker e mantenha a migração; nunca execute o worker antigo, que apaga sessões em cascata e reativa agendas. Não remova as tabelas de histórico nem reaplique lotes.
+
+## Login administrativo
+
+Configure `ADMIN_USERNAME` e `ADMIN_PASSWORD_HASH` apenas no `.env` do servidor. Gere o hash com `PYTHONPATH=backend .venv/bin/python -c 'import getpass; from retrovault.admin_auth import password_hash; print(password_hash(getpass.getpass()))'`; a senha é lida sem eco e não entra no histórico do shell. O formato é `scrypt$salt$digest`. Não versione senha, hash ou cookies. Sem credenciais configuradas nenhum login é aceito.
+
+O acesso fica em `/admin`. `ADMIN_SESSION_TTL_SECONDS` vale 28800 por padrão; cinco tentativas inválidas por endereço bloqueiam novas tentativas por 15 minutos. A sessão administrativa usa cookie HttpOnly distinto, com logout revogável no banco. Em ambiente HTTPS use `COOKIE_SECURE=true`. Dados globais e catálogo administrativo exigem autenticação no servidor; o cookie de visitante não concede esse acesso.
+
+## Indicadores e jornada
+
+Receita simulada vem dos itens congelados de pedidos confirmados: quantidade vendida, subtotal de venda, subtotal de aluguel e soma dos dois. Carrinhos e checkouts não contam como receita. Devoluções não estornam valores. Período comercial usa criação do pedido; o período de locações usa seu início. Datas informadas no painel incluem o dia final e são interpretadas em America/Fortaleza, convertidas para limites UTC. Autor (`visitor`/`simulation`) distingue demanda; canal (`pixel`/`interface`/`legacy`) distingue origem da confirmação.
+
+As etapas da jornada contam conversas distintas iniciadas no período: recomendação estruturada, inclusão efetiva com quantidade positiva no carrinho e pedido confirmado do visitante. Cada etapa pode ocorrer sem a anterior; eventos posteriores ao período ainda fazem parte da conversa. Conversão é conversas com pedido / conversas iniciadas, não pedidos / recomendações. Eventos de demanda fictícia não entram. A linha do tempo mostra sequência, sem provar causalidade. Busca de catálogo não conta como recomendação; falhas não contam como etapa concluída. Novas mensagens são preservadas integralmente, enquanto o contexto enviado ao Pixel continua limitado. Históricos migrados têm marcação parcial/legado.
+
+## Catálogo administrativo e PSP
+
+No admin, abra Catálogo, escolha console e busque um título. A busca não altera o acervo. Abra os detalhes e confirme a inclusão; o servidor reconsulta a associação jogo/plataforma no IGDB e aplica preços/estoque fictícios configurados. Novas ofertas ficam disponíveis após atualização nas sessões ativas e em sessões futuras. Confirmar uma oferta existente não repõe estoque.
+
+A revisão PSP identifica lançamento próprio, relançamento/port e classificação incerta. As datas por plataforma e `game_type.type` são evidência; ausência de datas não implica lançamento próprio. Fixtures sanitizadas consultadas em 12/10/2026 incluem Patapon, Crisis Core, Final Fantasy VII e Symphony of the Night. Referência: https://api-docs.igdb.com/#game e https://api-docs.igdb.com/#release-date. A revisão não desativa nada automaticamente: o admin confirma cada desativação; pedidos e aluguéis históricos permanecem disponíveis. Itens desativados devem ser removidos do carrinho antes de novo checkout.
+
+Expansão pela CLI foi retirada. `import --initial` é manutenção exclusiva da carga inicial em catálogo vazio; alterações posteriores usam o painel autenticado. O worker não consulta IGDB nem gera demanda. As ferramentas de Pixel não incluem gerenciamento do catálogo.

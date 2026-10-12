@@ -5,7 +5,7 @@ import time
 from uuid import uuid4
 from openai import OpenAI, OpenAIError
 from psycopg.types.json import Jsonb
-from . import commerce, config
+from . import commerce, config, journey
 from .db import connect
 from .catalog import catalog
 
@@ -14,6 +14,7 @@ Responda em português brasileiro, com clareza, entusiasmo moderado e respostas 
 Use texto simples, sem Markdown ou imagens. Para abrir demos, indique o botão na página do jogo.
 Todos os preços, estoques, plataformas e demos devem vir de ferramentas. Não invente informações.
 Consulte o catálogo antes de recomendar. Considere preferências e orçamento informados na conversa.
+Antes de apresentar recomendações, use record_recommendations com as ofertas escolhidas. Resultados de busca não são recomendações.
 search_catalog.query busca SOMENTE títulos, não gêneros. Para RPG, corrida ou outras preferências,
 use query="" e filtre os resultados pelo campo genres. Role-playing (RPG) significa RPG.
 Se um título/plataforma/modalidade for ambíguo, pergunte antes de editar o carrinho.
@@ -38,6 +39,7 @@ def tool(name, description, properties):
             'parameters':{'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}}
 
 TOOLS = [
+    tool('record_recommendations','Registra somente as ofertas que você vai recomendar na resposta.',{'offer_ids':{'type':'array','items':{'type':'integer'},'minItems':1,'maxItems':10}}),
     tool('search_catalog','Consulta ofertas e demonstrações da sessão; preço em centavos. query filtra somente título; use vazio para escolher por gênero nos resultados.', {
         'query':{'type':'string'}, 'platform':{'type':'string','enum':['','snes','gba','ps1','ps2','psp','nds']},
         'budget_cents':{'type':['integer','null']}, 'mode':{'type':'string','enum':['sale','rental']}}),
@@ -48,7 +50,15 @@ TOOLS = [
     tool('get_orders','Consulta pedidos e aluguéis desta sessão.',{}),
 ]
 
-def execute_tool(sid, name, args):
+def execute_tool(sid, name, args, message_id=None):
+    if name in {'set_cart','prepare_checkout','record_recommendations'}:
+        kind={'set_cart':'cart','prepare_checkout':'checkout','record_recommendations':'recommendation'}[name]
+        def operation(db):
+            commerce.require_session(db,sid)
+            if name=='set_cart': return commerce.set_cart(db,sid,args['offer_id'],args['mode'],args['quantity'])
+            if name=='prepare_checkout': return commerce.summary(db,sid)
+            return journey.recommend(db,sid,args['offer_ids'])
+        return journey.run(sid,'pixel',kind,operation,message_id)
     with connect() as db:
         commerce.require_session(db,sid)
         if name=='search_catalog':
@@ -82,6 +92,7 @@ def chat(sid, message, client=None):
             raise commerce.DomainError('Limite de mensagens por hora atingido. Você pode continuar pelo catálogo.',429)
         db.execute("UPDATE sessions SET chat_count=chat_count+1,chat_busy_until=now()+interval '180 seconds',chat_lease=%s WHERE id=%s",(lease,sid))
         history=session['messages'][-16:]
+        message_id=journey.receive(db,sid,message)
     checkout=None
     try:
         # Only exact explicit confirmation from the visitor can invoke finalization.
@@ -90,8 +101,9 @@ def chat(sid, message, client=None):
                 commerce.require_session(db,sid)
                 row=db.execute('SELECT id FROM checkouts WHERE session_id=%s ORDER BY created_at DESC LIMIT 1',(sid,)).fetchone()
                 if not row: raise commerce.DomainError('Prepare um resumo antes de confirmar.')
-                result=commerce.confirm(db,sid,row['id'],True)
-                reply=f'Pedido fictício {result["order_id"][:8]} confirmado! Pagamento simulado aprovado. Retirada fictícia na RetroVault.'
+                checkout_id=row['id']
+            result=journey.run(sid,'pixel','order',lambda db: commerce.confirm(db,sid,checkout_id,True),message_id)
+            reply=f'Pedido fictício {result["order_id"][:8]} confirmado! Pagamento simulado aprovado. Retirada fictícia na RetroVault.'
         else:
             model=os.getenv('PIXEL_OPENAI_MODEL_SNAPSHOT','')
             if not model or not os.getenv('OPENAI_API_KEY'):
@@ -110,7 +122,7 @@ def chat(sid, message, client=None):
                     break
                 for call in calls:
                     try:
-                        output=execute_tool(sid,call.name,json.loads(call.arguments))
+                        output=execute_tool(sid,call.name,json.loads(call.arguments),message_id)
                         if call.name=='prepare_checkout': checkout=output
                     except (commerce.DomainError,ValueError,KeyError,TypeError) as error:
                         output={'error':error.message if isinstance(error,commerce.DomainError) else 'Parâmetros inválidos.'}
@@ -121,9 +133,11 @@ def chat(sid, message, client=None):
             commerce.require_session(db,sid)
             messages=[*history,{'role':'user','content':message},{'role':'assistant','content':reply}][-16:]
             db.execute('UPDATE sessions SET messages=%s WHERE id=%s AND chat_lease=%s',(Jsonb(messages),sid,lease))
+            journey.respond(db,sid,message_id,reply)
         return {'reply':reply,'checkout':checkout}
     except OpenAIError:
         raise commerce.DomainError('Pixel está indisponível. Confira seu carrinho e continue pelo catálogo ou tente novamente.',503) from None
     finally:
         with connect() as db:
+            db.execute("UPDATE conversation_messages SET status='failed' WHERE id=%s AND status='received'",(message_id,))
             db.execute('UPDATE sessions SET chat_busy_until=NULL,chat_lease=NULL WHERE id=%s AND chat_lease=%s',(sid,lease))

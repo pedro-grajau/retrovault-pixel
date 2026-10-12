@@ -9,7 +9,7 @@ from retrovault.catalog import IGDB, IntegrationError
 def test_migrations_idempotent_and_unique(database):
     migrate()
     with connect() as db:
-        assert db.execute('SELECT count(*) AS n FROM schema_migrations').fetchone()['n'] == 2
+        assert db.execute('SELECT count(*) AS n FROM schema_migrations').fetchone()['n'] == 3
         db.execute("INSERT INTO platforms VALUES ('snes',19,'SNES')")
         db.execute("INSERT INTO games(id,title) VALUES (1,'Quest')")
         db.execute("INSERT INTO offers(game_id,platform,sale_price,rental_price) VALUES (1,'snes',100,10)")
