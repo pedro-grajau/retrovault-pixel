@@ -1,0 +1,6 @@
+[
+ {"id":1128,"name":"Castlevania: Symphony of the Night","platforms":[9,32,7,38,12],"game_type":{"id":0,"type":"Main Game"},"release_dates":[{"date":858816000,"platform":7},{"date":1184803200,"platform":38}]},
+ {"id":7812,"name":"Patapon","platforms":[46,38],"game_type":{"id":0,"type":"Main Game"},"release_dates":[{"platform":46},{"date":1198108800,"platform":38}]},
+ {"id":427,"name":"Final Fantasy VII","parent_game":393025,"platforms":[9,7,38],"game_type":{"id":10,"type":"Expanded Game"},"release_dates":[{"date":873590400,"platform":7},{"date":1243900800,"platform":38}]},
+ {"id":2407,"name":"Crisis Core: Final Fantasy VII","platforms":[38],"game_type":{"id":0,"type":"Main Game"},"release_dates":[{"date":1189641600,"platform":38}]}
+]

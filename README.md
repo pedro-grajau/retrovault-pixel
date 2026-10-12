@@ -2,7 +2,7 @@
 
 Locadora física fictícia para portfólio. Compre, alugue e simule devoluções pelo catálogo ou pelo chat Pixel. Metadados vêm do IGDB; clientes, preços, estoque, demanda, pedidos, retirada e pagamentos são fictícios. Não há cobrança, cadastro com dados pessoais ou entrega real de jogos.
 
-Backend **Python 3.12 / FastAPI**, interface Next.js / TypeScript e PostgreSQL 17 em Docker. Um worker Python executa a demanda a cada **30 minutos**, com avanço manual. Publicação e WhatsApp serão etapas posteriores.
+Backend **Python 3.12 / FastAPI**, interface Next.js / TypeScript e PostgreSQL 17 em Docker. A demanda avança **somente pelo botão**; o worker cuida apenas da manutenção de sessões. O painel `/admin` acompanha receita simulada, aluguéis e jornadas do Pixel. Publicação e WhatsApp serão etapas posteriores.
 
 ## Executar localmente
 
@@ -20,7 +20,7 @@ make import-initial
 make demos
 ```
 
-A amostra importa cinco ofertas por console: SNES, GBA, PS1, PS2, PSP e NDS. Repetir `make import-initial` atualiza metadados sem duplicar ou ampliar uma amostra preenchida. `make import` acrescenta um jogo por console. Não são baixados ROMs ou executáveis.
+A carga inicial em catálogo vazio seleciona até cinco ofertas por console: SNES, GBA, PS1, PS2, PSP e NDS, priorizando lançamentos próprios de PSP. Depois, somente o administrador busca, escolhe e adiciona títulos pelo painel; repetir a carga inicial em catálogo preenchido é recusado. Não são baixados ROMs ou executáveis.
 
 Inicie cada processo em seu próprio terminal:
 
@@ -36,7 +36,7 @@ npm run dev --prefix frontend
 make worker
 ```
 
-Abra [RetroVault](http://localhost:3000) e [documentação da API](http://localhost:8000/docs). Use `localhost`, conforme `APP_ORIGIN`. A interface encaminha `/api` ao backend; `BACKEND_URL` é uma configuração de servidor. PostgreSQL fica no loopback, porta 55432, com volume persistente; credenciais do Compose servem apenas ao desenvolvimento local.
+Abra [RetroVault](http://localhost:3000) e [documentação da API](http://localhost:8000/docs). Também pode usar `http://127.0.0.1:3000`: quando `APP_ORIGIN` é local, a API aceita os aliases de loopback na mesma porta e protocolo. A interface encaminha `/api` ao backend; `BACKEND_URL` é uma configuração de servidor. PostgreSQL fica no loopback, porta 55432, com volume persistente; credenciais do Compose servem apenas ao desenvolvimento local.
 
 Encerre processos com Ctrl+C e o banco com `docker compose stop db`; o catálogo permanece no volume. Reiniciar não reaplica lotes já concluídos.
 
@@ -54,7 +54,7 @@ Chrono Trigger e Super Metroid para SNES têm links externos em `backend/demo-li
 
 ## Configuração e verificação
 
-`SIMULATION_INTERVAL_SECONDS=1800` controla a meia hora; `IMPORT_INTERVAL_SECONDS=86400` controla a expansão diária. Reinicie backend e worker após alterar `.env`. Consulte [parâmetros e contratos](docs/operations.md).
+Configure `ADMIN_USERNAME` e `ADMIN_PASSWORD_HASH` no servidor para acessar `/admin`, conforme o procedimento de geração segura do hash em operações. Não há agendas de demanda ou importação. Reinicie backend e worker após alterar `.env`. Consulte [parâmetros e contratos](docs/operations.md).
 
 ```bash
 make test

@@ -13,21 +13,26 @@ def require_session(conn, sid, lock=True, touch=False):
     if not sid:
         raise DomainError('Inicie uma demonstração para continuar.', 401)
     row = conn.execute('SELECT * FROM sessions WHERE id=%s' + (' FOR UPDATE' if lock else ''), (sid,)).fetchone()
-    if not row or (datetime.now(timezone.utc) - row['last_seen']).total_seconds() > config.SESSION_TTL:
+    if not row or row['expired_at'] or (datetime.now(timezone.utc) - row['last_seen']).total_seconds() > config.SESSION_TTL:
         raise DomainError('Sua sessão expirou. Inicie uma nova demonstração.', 401)
     if touch:
         conn.execute('UPDATE sessions SET last_seen=now() WHERE id=%s', (sid,))
     return row
 
 def create_session(conn):
+    conn.execute('SELECT pg_advisory_xact_lock(172906)')
     sid = secrets.token_urlsafe(32)
     customer = secrets.choice(['Alex', 'Sam', 'Charlie', 'Robin', 'Taylor']) + ' · cliente fictício'
     conn.execute('INSERT INTO sessions(id,customer) VALUES (%s,%s)', (sid, customer))
-    for offer in conn.execute('SELECT id FROM offers').fetchall():
-        conn.execute('INSERT INTO sale_stock VALUES (%s,%s,%s)', (sid, offer['id'], config.SALE_STOCK))
-        for _ in range(config.RENTAL_STOCK):
-            conn.execute('INSERT INTO rental_copies(session_id,offer_id) VALUES (%s,%s)', (sid, offer['id']))
+    for offer in conn.execute('SELECT id FROM offers WHERE active').fetchall():
+        initialize_offer(conn,sid,offer['id'])
     return sid, customer
+
+def initialize_offer(conn,sid,offer_id):
+    created=conn.execute('INSERT INTO sale_stock VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING offer_id',(sid,offer_id,config.SALE_STOCK)).fetchone()
+    if created:
+        for _ in range(config.RENTAL_STOCK):
+            conn.execute('INSERT INTO rental_copies(session_id,offer_id) VALUES (%s,%s)',(sid,offer_id))
 
 def items(conn, sid):
     result = conn.execute('''SELECT c.offer_id,c.mode,c.quantity,o.platform,p.name AS platform_name,g.title,
@@ -55,15 +60,24 @@ def set_cart(conn, sid, offer_id, mode, quantity):
         raise DomainError('Modalidade ou quantidade inválida.', 422)
     if not conn.execute('SELECT 1 FROM sale_stock WHERE session_id=%s AND offer_id=%s', (sid, offer_id)).fetchone():
         raise DomainError('Oferta indisponível nesta sessão.', 404)
+    previous=conn.execute('SELECT quantity FROM carts WHERE session_id=%s AND offer_id=%s AND mode=%s',(sid,offer_id,mode)).fetchone()
+    if (previous['quantity'] if previous else 0)==quantity:
+        return cart(conn,sid)
     if quantity == 0:
         conn.execute('DELETE FROM carts WHERE session_id=%s AND offer_id=%s AND mode=%s', (sid, offer_id, mode))
     else:
+        if not conn.execute('SELECT 1 FROM offers WHERE id=%s AND active FOR SHARE',(offer_id,)).fetchone():
+            raise DomainError('Oferta não está mais disponível.',409)
         conn.execute('INSERT INTO carts VALUES (%s,%s,%s,%s) ON CONFLICT(session_id,offer_id,mode) DO UPDATE SET quantity=excluded.quantity', (sid, offer_id, mode, quantity))
     conn.execute('UPDATE sessions SET version=version+1 WHERE id=%s', (sid,))
+    from . import journey
+    journey.event(conn,sid,'cart',{'mode':mode,'quantity':quantity},offer_id=offer_id)
     return cart(conn, sid)
 
 def validate_stock(conn, sid, rows):
     for item in rows:
+        if not conn.execute('SELECT 1 FROM offers WHERE id=%s AND active FOR SHARE',(item['offer_id'],)).fetchone():
+            raise DomainError('Oferta não está mais disponível. Atualize o carrinho.')
         if item['mode'] == 'sale':
             stock = conn.execute('SELECT quantity FROM sale_stock WHERE session_id=%s AND offer_id=%s FOR UPDATE', (sid, item['offer_id'])).fetchone()
             n = stock['quantity'] if stock else 0
@@ -81,6 +95,8 @@ def summary(conn, sid):
     result = {'items': rows, 'total': sum(i['subtotal'] for i in rows), 'pickup': 'Retirada fictícia na loja', 'payment': 'Pagamento simulado'}
     cid = str(uuid4())
     conn.execute('INSERT INTO checkouts(id,session_id,version,summary) VALUES (%s,%s,%s,%s)', (cid, sid, session['version'], Jsonb(result)))
+    from . import journey
+    journey.event(conn,sid,'checkout',{'checkout_id':cid},event_id='checkout:'+cid)
     return {**result, 'checkout_id': cid}
 
 def place_order(conn, sid, rows, actor='visitor', checkout_id=None):
@@ -88,6 +104,11 @@ def place_order(conn, sid, rows, actor='visitor', checkout_id=None):
     oid = str(uuid4())
     conn.execute('INSERT INTO orders(id,session_id,checkout_id,actor,items,total) VALUES (%s,%s,%s,%s,%s,%s)',
         (oid, sid, checkout_id, actor, Jsonb(rows), sum(i['subtotal'] for i in rows)))
+    from . import journey
+    origin='simulation' if actor=='simulation' else journey.context.get()['origin']
+    conn.execute('UPDATE orders SET origin=%s WHERE id=%s',(origin,oid))
+    if actor!='simulation':
+        journey.event(conn,sid,'order',{'items':rows},order_id=oid,event_id='order:'+oid)
     for item in rows:
         if item['mode'] == 'sale':
             conn.execute('UPDATE sale_stock SET quantity=quantity-%s WHERE session_id=%s AND offer_id=%s', (item['quantity'], sid, item['offer_id']))

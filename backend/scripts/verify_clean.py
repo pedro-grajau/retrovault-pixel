@@ -22,12 +22,12 @@ def main():
             assert len(rows)==30 and len({r['platform'] for r in rows})==6
             sid,_=commerce.create_session(db)
         result=tick(now=3600)
-        assert result['import']['added']==6
-        assert tick(now=3601)['import']['status']=='already_processed'
+        assert result['cleaned']==0
+        assert tick(now=3601)['cleaned']==0
         with connect() as db:
-            assert len(catalog(db))==36
-            assert len(db.execute('SELECT * FROM batches WHERE session_id=%s',(sid,)).fetchall())==1
-        print('Schema vazio: migrações, IGDB real 30 + repetição 0 + expansão agendada 6, lote periódico idempotente: OK.')
+            assert len(catalog(db))==30
+            assert len(db.execute('SELECT * FROM batches WHERE session_id=%s',(sid,)).fetchall())==0
+        print('Schema vazio: migrações, IGDB real 30 + repetição 0, manutenção sem demanda ou importação: OK.')
     finally:
         config.DATABASE_URL=base
         with psycopg.connect(base) as db:

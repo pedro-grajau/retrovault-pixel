@@ -5,13 +5,30 @@ import httpx
 import pytest
 from openai import APIConnectionError
 from fastapi.testclient import TestClient
-from retrovault import pixel, commerce as c
+from retrovault import pixel, config, commerce as c
 from retrovault.db import connect
 from retrovault.main import app
 from retrovault.simulation import advance
 
 def function(name, args):
     return NS(type='function_call', name=name, arguments=json.dumps(args), call_id=name)
+
+def test_local_origin_aliases_and_public_origin():
+    expected=['http://localhost:3000','http://127.0.0.1:3000','http://[::1]:3000']
+    for origin in expected:
+        assert config.allowed_origins(origin)==expected
+    assert config.allowed_origins('https://retrovault.example')==['https://retrovault.example']
+
+def test_session_accepts_local_aliases_and_rejects_other_origins(database):
+    with TestClient(app) as api:
+        for origin in config.APP_ORIGINS:
+            response=api.post('/api/session',json={},headers={'Origin':origin,'Sec-Fetch-Site':'same-origin'})
+            assert response.status_code==200
+            assert response.headers['access-control-allow-origin']==origin
+            assert api.get('/api/state').status_code==200
+        for origin in ('http://localhost:3001','https://localhost:3000','http://localhost.evil.example:3000','null'):
+            assert api.post('/api/session',json={},headers={'Origin':origin}).status_code==403
+        assert api.post('/api/session',json={},headers={'Origin':config.APP_ORIGIN,'Sec-Fetch-Site':'cross-site'}).status_code==403
 
 class Provider:
     def __init__(self, steps):

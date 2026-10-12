@@ -14,7 +14,7 @@ class FakeIGDB:
         import re
         if 'where id=' in body: return []
         pid=int(re.search(r'platforms=\((\d+)\)',body).group(1))
-        return [{'id':pid*100+i,'name':f'Game {pid}-{i}','genres':[{'name': 'Platform' if i%2 else 'Racing'}]} for i in range(10)]
+        return [{'id':pid*100+i,'name':f'Game {pid}-{i}','genres':[{'name': 'Platform' if i%2 else 'Racing'}], 'game_type':{'type':'Main Game'},'release_dates':[{'platform':pid,'date':1000}]} for i in range(10)]
 
 def test_partial_import_failure_rolls_back(database):
     assert import_catalog(True,client=FakeIGDB())['added']==30
@@ -96,18 +96,16 @@ def test_simulation_idempotency_isolation_empty_stock(stocked):
         assert not commerce.orders(db,b)
         assert db.execute('SELECT min(quantity) AS n FROM sale_stock WHERE session_id=%s',(b,)).fetchone()['n']==3
 
-def test_worker_slots_expiry_manual_concurrency(stocked):
+def test_worker_maintenance_and_manual_limit(stocked):
     a,b=stocked
-    fake=lambda **kw:{'status':'complete','added':0}
-    assert config.SIMULATION_INTERVAL==1800
-    assert tick(now=3600,importer=fake)['sessions']==2
-    tick(now=3601,importer=fake)
+    assert tick()['cleaned']==0
+    assert tick()['cleaned']==0
     with connect() as db:
-        assert db.execute('SELECT count(*) AS n FROM batches').fetchone()['n']==2
+        assert db.execute('SELECT count(*) AS n FROM batches').fetchone()['n']==0
         advance(db,a,'manual',manual=True)
     with pytest.raises(commerce.DomainError):
         with connect() as db: advance(db,a,'manual2',manual=True)
     with connect() as db:
         db.execute("UPDATE sessions SET last_seen=now()-interval '2 days' WHERE id=%s",(b,))
-    tick(now=5400,importer=fake)
-    with connect() as db: assert not db.execute('SELECT 1 FROM sessions WHERE id=%s',(b,)).fetchone()
+    assert tick()['cleaned']==1
+    with connect() as db: assert db.execute('SELECT expired_at FROM sessions WHERE id=%s',(b,)).fetchone()['expired_at']

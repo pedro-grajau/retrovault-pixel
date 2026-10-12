@@ -16,7 +16,7 @@ def advance(conn, sid, batch_id, manual=False):
     events = []
     offers = conn.execute('''SELECT o.*,g.title,p.name AS platform_name FROM offers o
         JOIN games g ON g.id=o.game_id JOIN platforms p ON p.slug=o.platform
-        JOIN sale_stock s ON s.offer_id=o.id WHERE s.session_id=%s ORDER BY o.id''', (sid,)).fetchall()
+        JOIN sale_stock s ON s.offer_id=o.id WHERE o.active AND s.session_id=%s ORDER BY o.id''', (sid,)).fetchall()
     for index in range(config.integer('SIMULATION_BATCH_SIZE', 3)):
         mode = rng.choice(['sale', 'rental', 'return'])
         event = {'type': mode, 'simulated': True, 'index': index}
